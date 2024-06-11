@@ -1,15 +1,12 @@
 package contents
 
 import (
-	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
-	"gorm.io/gorm"
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"time"
 	"treehollow-v3-backend/pkg/base"
@@ -18,89 +15,7 @@ import (
 	"treehollow-v3-backend/pkg/utils"
 )
 
-//TODO: (middle priority) better result for `reports`
-func adminDecryptionCommand() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !viper.GetBool("allow_admin_commands") {
-			c.Next()
-			return
-		}
-		user := c.MustGet("user").(base.User)
-		keywords := c.Query("keywords")
-		if base.CanViewDecryptionMessages(&user) {
-			info := ""
-			var uid int32 = -1
-			reg := regexp.MustCompile("decrypt pid=([0-9]+)")
-			if reg.MatchString(keywords) {
-				pidStr := reg.FindStringSubmatch(keywords)[1]
-				pid, _ := strconv.Atoi(pidStr)
-				var post base.Post
-				err3 := base.GetDb(true).First(&post, int32(pid)).Error
-				if err3 != nil {
-					if errors.Is(err3, gorm.ErrRecordNotFound) {
-						base.HttpReturnWithErrAndAbort(c, -101, logger.NewSimpleError("DecryptPostNoPid", "找不到这条树洞", logger.WARN))
-					} else {
-						base.HttpReturnWithCodeMinusOneAndAbort(c, logger.NewError(err3, "GetSavedPostFailed", consts.DatabaseReadFailedString))
 
-					}
-					return
-				}
-				uid = post.UserID
-				info += fmt.Sprintf("Decryption information for post #%d:", post.ID)
-			}
-
-			reg = regexp.MustCompile("decrypt cid=([0-9]+)")
-			if reg.MatchString(keywords) {
-				cidStr := reg.FindStringSubmatch(keywords)[1]
-				cid, _ := strconv.Atoi(cidStr)
-				var comment base.Comment
-				err3 := base.GetDb(true).First(&comment, int32(cid)).Error
-				if err3 != nil {
-					if errors.Is(err3, gorm.ErrRecordNotFound) {
-						base.HttpReturnWithErrAndAbort(c, -101, logger.NewSimpleError("DecryptCommentNoPid", "找不到这条树洞评论", logger.WARN))
-					} else {
-						base.HttpReturnWithCodeMinusOneAndAbort(c, logger.NewError(err3, "GetSavedCommentFailed", consts.DatabaseReadFailedString))
-
-					}
-					return
-				}
-				uid = comment.UserID
-				info += fmt.Sprintf("Decryption information for comment #%d-%d:", comment.PostID, comment.ID)
-			}
-
-			if uid > 0 {
-				var toBeDecryptedUser base.User
-				err3 := base.GetDb(true).First(&toBeDecryptedUser, uid).Error
-				if err3 != nil {
-					if errors.Is(err3, gorm.ErrRecordNotFound) {
-						base.HttpReturnWithCodeMinusOneAndAbort(c, logger.NewSimpleError("DecryptNoUser", "找不到发帖用户", logger.WARN))
-					} else {
-						base.HttpReturnWithCodeMinusOneAndAbort(c, logger.NewError(err3, "GetDecryptionUserFailed", consts.DatabaseReadFailedString))
-
-					}
-					return
-				}
-
-				var decryptionMsgs []base.DecryptionKeyShares
-				err := base.GetDb(false).Where("email_encrypted = ?", toBeDecryptedUser.EmailEncrypted).
-					Find(&decryptionMsgs).Error
-				if err != nil {
-					base.HttpReturnWithCodeMinusOneAndAbort(c, logger.NewError(err, "GetDecryptionMsgsFailed", consts.DatabaseReadFailedString))
-					return
-				}
-				info += "\nEncrypted email = " + toBeDecryptedUser.EmailEncrypted + "\n"
-				for _, msg := range decryptionMsgs {
-					info += "\n***\nKeykeeper email:" + msg.PGPEmail + "\nPGP encrypted message:\n```\n" +
-						msg.PGPMessage + "\n```"
-				}
-
-				httpReturnInfo(c, info)
-				return
-			}
-		}
-		c.Next()
-	}
-}
 
 func adminHelpCommand() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -114,9 +29,6 @@ func adminHelpCommand() gin.HandlerFunc {
 			info := ""
 			if base.CanViewStatistics(&user) {
 				info += "`stats`: 查看树洞统计信息\n"
-			}
-			if base.CanViewDecryptionMessages(&user) {
-				info += "`decrypt pid=123`, `decrypt cid=1234`: 查看树洞发帖人个人信息的待解密消息\n"
 			}
 			if base.CanViewDeletedPost(&user) {
 				info += "`dels`: 搜索所有被管理员删除的树洞和回复(包括删除后恢复的)\n"

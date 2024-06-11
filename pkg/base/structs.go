@@ -54,13 +54,6 @@ type User struct {
 	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
-type DecryptionKeyShares struct {
-	EmailEncrypted string `gorm:"index;type:varchar(200) NOT NULL"`
-	PGPMessage     string `gorm:"type:varchar(5000) NOT NULL"`
-	PGPEmail       string `gorm:"index;type:varchar(100) NOT NULL"`
-	CreatedAt      time.Time
-	DeletedAt      gorm.DeletedAt `gorm:"index"`
-}
 
 type Email struct {
 	EmailHash string `gorm:"primaryKey;type:char(64) NOT NULL"`
@@ -113,10 +106,17 @@ type Post struct {
 	LikeNum      int32  `gorm:"index"`
 	ReplyNum     int32  `gorm:"index"`
 	ReportNum    int32
+	DistinctCommenterCount int32 `gorm:"default:0"` 
 	//Comments     []Comment
 	CreatedAt time.Time      `gorm:"index"`
 	UpdatedAt time.Time      `gorm:"index"`
 	DeletedAt gorm.DeletedAt `gorm:"index"`
+}
+
+type PostCommenter struct {
+    PostID        int32  `gorm:"primaryKey"`
+    UserID        int32  `gorm:"primaryKey"`
+    CommenterName string `gorm:"type:varchar(60) NOT NULL"`
 }
 
 type Comment struct {

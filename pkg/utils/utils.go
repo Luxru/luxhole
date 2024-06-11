@@ -9,9 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/ProtonMail/gopenpgp/v2/crypto"
 	"github.com/google/uuid"
-	errors2 "github.com/pkg/errors"
 	"github.com/sigurn/crc8"
 	"github.com/spf13/viper"
 	"gorm.io/gorm"
@@ -127,27 +125,6 @@ func CheckEmail(email string) bool {
 	// REF: https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address
 	var emailRegexp = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
 	return emailRegexp.MatchString(email)
-}
-
-func CreatePublicKeyRing(publicKey string) (*crypto.KeyRing, error) {
-	publicKeyObj, err := crypto.NewKeyFromArmored(publicKey)
-	if err != nil {
-		return nil, errors2.Wrap(err, "gopenpgp: unable to parse public key")
-	}
-
-	if publicKeyObj.IsPrivate() {
-		publicKeyObj, err = publicKeyObj.ToPublic()
-		if err != nil {
-			return nil, errors2.Wrap(err, "gopenpgp: unable to extract public key from private key")
-		}
-	}
-
-	publicKeyRing, err := crypto.NewKeyRing(publicKeyObj)
-	if err != nil {
-		return nil, errors2.Wrap(err, "gopenpgp: unable to create new keyring")
-	}
-
-	return publicKeyRing, nil
 }
 
 func IsInAllowedSubnet(ip string) bool {

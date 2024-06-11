@@ -2,12 +2,8 @@ package security
 
 import (
 	"errors"
-	"fmt"
-	"github.com/ProtonMail/gopenpgp/v2/helper"
-	"github.com/SSSaaS/sssa-golang"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/spf13/viper"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"net"
@@ -21,45 +17,7 @@ import (
 	"treehollow-v3-backend/pkg/utils"
 )
 
-func saveKeyShares(user *base.User, pwHashed string, tx *gorm.DB) *logger.InternalError {
-	pgpPublicKeys := viper.GetStringSlice("key_keepers_pgp_public_keys")
-	minDecryptShares := viper.GetInt("min_decryption_key_count")
-	if len(pgpPublicKeys) < 1 || minDecryptShares < 1 {
-		return logger.NewSimpleError("ServerConfigError", "服务器加密配置错误，请联系管理员", logger.FATAL)
-	}
-	shares, err2 := sssa.Create(minDecryptShares, len(pgpPublicKeys), pwHashed)
-	if err2 != nil {
-		return logger.NewError(err2, "SSSACreateFailed", "加密失败，请联系管理员")
-	}
-	for i, share := range shares {
-		keyRing, _ := utils.CreatePublicKeyRing(pgpPublicKeys[i])
-		PGPEmail := keyRing.GetIdentities()[0].Email
-		msg := fmt.Sprintf(`Hello keykeeper %s,
 
-If you can see this message, you've successfully obtained your key slice.
-
-The following string is the key slice that can be used to decrypt the user whose id=%d. There are %d such key slices in total and the user's personal information can be decrypted when the number of available key slices is greater than or equal to %d.
-
-If you agree to decrypt this user's personal information, please submit the following key slice to technician for decryption. If you do not agree to the decryption, please do not disclose this key slice to anyone.
-
-======================
-%s
-======================`, PGPEmail, user.ID, len(pgpPublicKeys), minDecryptShares, share)
-		armor, err3 := helper.EncryptMessageArmored(pgpPublicKeys[i], msg)
-		if err3 != nil {
-			return logger.NewError(err3, "EncryptMessageArmoredFailed", "加密失败，请联系管理员")
-		}
-		err4 := tx.Create(&base.DecryptionKeyShares{
-			EmailEncrypted: user.EmailEncrypted,
-			PGPMessage:     armor,
-			PGPEmail:       PGPEmail,
-		}).Error
-		if err4 != nil {
-			return logger.NewError(err4, "SaveDecryptionKeySharesFailed", consts.DatabaseWriteFailedString)
-		}
-	}
-	return nil
-}
 
 func createDevice(c *gin.Context, user *base.User, pwHashed string, tx *gorm.DB) error {
 	email := strings.ToLower(c.PostForm("email"))
@@ -107,11 +65,6 @@ func createDevice(c *gin.Context, user *base.User, pwHashed string, tx *gorm.DB)
 		return rtn.Err
 	}
 
-	err4 := saveKeyShares(user, pwHashed, tx)
-	if err4 != nil {
-		base.HttpReturnWithCodeMinusOne(c, err4)
-		return err4.Err
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":  0,
@@ -243,20 +196,6 @@ func changePassword(c *gin.Context) {
 			return result.Error
 		}
 
-		err3 := tx.Where("email_encrypted = ?", oldEmailEncrypted).
-			Delete(&base.DecryptionKeyShares{}).Error
-		if err3 != nil {
-			base.HttpReturnWithCodeMinusOne(c, logger.NewError(err3, "DeleteDecryptionSharesFailed", consts.DatabaseWriteFailedString))
-			return err3
-		}
-
-		err4 := saveKeyShares(&base.User{
-			EmailEncrypted: newEmailEncrypted,
-		}, newPwHashed, tx)
-		if err4 != nil {
-			base.HttpReturnWithCodeMinusOne(c, err4)
-			return err4.Err
-		}
 
 		err5 := tx.Where("user_id = ?", user.ID).
 			Delete(&base.Device{}).Error

@@ -27,6 +27,7 @@ const PushApiLogFile = "push.log"
 const ServicesApiLogFile = "services-api.log"
 const DetailLogFile = "detail-log.log"
 const SecurityApiLogFile = "security-api.log"
+const AllAPiLogFile = "all-api.log"
 
 const DatabaseReadFailedString = "数据库读取失败，请联系管理员"
 const DatabaseWriteFailedString = "数据库写入失败，请联系管理员"

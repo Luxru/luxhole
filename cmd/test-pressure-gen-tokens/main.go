@@ -15,7 +15,7 @@ func main() {
 	config.InitConfigFile()
 	base.InitDb()
 
-	logFile, err := os.OpenFile("pressure_test_tokens.txt", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
+	logFile, err := os.OpenFile("loadtest/pressure_test_tokens.txt", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
 	if err != nil {
 		panic(err)
 	}

@@ -19,9 +19,7 @@ import (
 	"treehollow-v3-backend/pkg/utils"
 )
 
-func ServicesApiListenHttp() {
-	r := gin.New()
-
+func InitService(){
 	bot.InitBot()
 	initLimiters()
 	shutdownCountDown = 2
@@ -29,7 +27,11 @@ func ServicesApiListenHttp() {
 	_, _ = c.AddFunc("0 0 * * *", func() {
 		shutdownCountDown = 2
 	})
+}
 
+func ServicesApiListenHttp() {
+	r := gin.New()
+	InitService()
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowAllOrigins = true
 	corsConfig.AllowHeaders = append(corsConfig.AllowHeaders, "TOKEN")
@@ -69,7 +71,6 @@ func ServicesApiListenHttp() {
 		limiterMiddleware(searchLimiter, "你今天搜索太多树洞了，明天再来吧", logger.WARN),
 		searchHotPosts(),
 		adminHelpCommand(),
-		adminDecryptionCommand(),
 		adminLogsCommand(),
 		adminReportsCommand(),
 		adminStatisticsCommand(),
@@ -140,4 +141,84 @@ func ServicesApiListenHttp() {
 		err = http.Serve(listener, r)
 		return
 	}
+}
+
+func AddContentsControllers(r *gin.Engine) (*gin.Engine) {
+	r.POST("/v3/config/set_push",
+		auth.DisallowUnregisteredUsers(),
+		setPush)
+	r.GET("/v3/config/get_push",
+		auth.DisallowUnregisteredUsers(),
+		getPush)
+	r.GET("/v3/contents/system_msg",
+		auth.DisallowUnregisteredUsers(),
+		systemMsg)
+	r.GET("/v3/contents/post/list",
+		checkParameterPage(consts.MaxPage),
+		listPost)
+	r.GET("/v3/contents/post/randomlist",
+		limiterMiddleware(randomListLimiter, "你今天刷了太多树洞了，明天再来吧", logger.WARN),
+		wanderListPost)
+	r.GET("/v3/contents/post/detail",
+		limiterMiddleware(detailPostLimiter, "你今天刷了太多树洞了，明天再来吧", logger.WARN),
+		detailPost)
+	r.GET("/v3/contents/search",
+		checkParameterPage(consts.SearchMaxPage),
+		limiterMiddleware(searchShortTimeLimiter, "请不要短时间内连续搜索树洞", logger.INFO),
+		limiterMiddleware(searchLimiter, "你今天搜索太多树洞了，明天再来吧", logger.WARN),
+		searchHotPosts(),
+		adminHelpCommand(),
+		adminLogsCommand(),
+		adminReportsCommand(),
+		adminStatisticsCommand(),
+		adminSysMsgsCommand(),
+		adminShutdownCommand(),
+		sysLoadWarningMiddleware(viper.GetFloat64("sys_load_threshold"), "目前树洞服务器负载较高，搜索功能已被暂时停用"),
+		searchPost)
+	r.GET("/v3/contents/post/attentions",
+		auth.DisallowUnregisteredUsers(),
+		checkParameterPage(consts.MaxPage),
+		attentionPosts)
+	r.GET("/v3/contents/my_msgs",
+		auth.DisallowUnregisteredUsers(),
+		checkParameterPage(consts.MaxPage),
+		myMsgs)
+	r.GET("/v3/contents/search/attentions",
+		auth.DisallowUnregisteredUsers(),
+		checkParameterPage(consts.SearchMaxPage),
+		limiterMiddleware(searchShortTimeLimiter, "请不要短时间内连续搜索树洞", logger.INFO),
+		limiterMiddleware(searchLimiter, "你今天搜索太多树洞了，明天再来吧", logger.WARN),
+		searchAttentionPost)
+	r.POST("/v3/send/post",
+		auth.DisallowUnregisteredUsers(),
+		limiterMiddleware(postLimiter, "请不要短时间内连续发送树洞", logger.INFO),
+		limiterMiddleware(postLimiter2, "你24小时内已经发送太多树洞了", logger.WARN),
+		disallowBannedPostUsers(),
+		checkParameterTextAndImage(),
+		checkParameterVoteOptions,
+		sendPost)
+	r.POST("/v3/send/vote",
+		auth.DisallowUnregisteredUsers(),
+		disallowBannedPostUsers(),
+		sendVote)
+	r.POST("/v3/send/comment",
+		auth.DisallowUnregisteredUsers(),
+		limiterMiddleware(commentLimiter, "请不要短时间内连续发送树洞回复", logger.INFO),
+		limiterMiddleware(commentLimiter2, "你24小时内已经发送太多树洞回复了", logger.WARN),
+		disallowBannedPostUsers(),
+		checkParameterTextAndImage(),
+		sendComment)
+	r.POST("/v3/edit/attention",
+		auth.DisallowUnregisteredUsers(),
+		limiterMiddleware(doAttentionLimiter, "你今天关注太多树洞了，明天再来吧", logger.WARN),
+		editAttention)
+	r.POST("/v3/edit/report/post",
+		auth.DisallowUnregisteredUsers(),
+		checkReportParams(true),
+		handleReport(false))
+	r.POST("/v3/edit/report/comment",
+		auth.DisallowUnregisteredUsers(),
+		checkReportParams(false),
+		handleReport(true))
+	return r
 }

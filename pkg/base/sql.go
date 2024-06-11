@@ -1,10 +1,6 @@
 package base
 
 import (
-	"github.com/spf13/viper"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 	"io"
 	"log"
 	"os"
@@ -14,14 +10,20 @@ import (
 	"treehollow-v3-backend/pkg/consts"
 	"treehollow-v3-backend/pkg/model"
 	"treehollow-v3-backend/pkg/utils"
+
+	"github.com/spf13/viper"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 var db *gorm.DB
 
 func AutoMigrateDb() {
-	err := db.AutoMigrate(&User{}, &DecryptionKeyShares{}, &Email{},
+	err := db.AutoMigrate(&User{}, &Email{},
 		&Device{}, &PushSettings{}, &Vote{},
-		&VerificationCode{}, &Post{}, &PushMessage{},
+		&VerificationCode{}, &Post{}, &PostCommenter{}, &PushMessage{},
 		&Comment{}, &Attention{}, &Report{}, &SystemMessage{}, Ban{})
 	utils.FatalErrorHandle(&err, "error migrating database!")
 }
@@ -34,7 +36,7 @@ func InitDb() {
 	logFile, err := os.OpenFile("sql.log", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
 	utils.FatalErrorHandle(&err, "error init sql log file")
 	mw := io.MultiWriter(os.Stdout, logFile)
-	logLevel := logger.Warn
+	logLevel := logger.Silent
 	if viper.GetBool("is_debug") {
 		logLevel = logger.Info
 	}
@@ -43,7 +45,7 @@ func InitDb() {
 		logger.Config{
 			SlowThreshold: time.Millisecond * 500, // Slow SQL threshold
 			LogLevel:      logLevel,               // Log level
-			Colorful:      false,
+			Colorful:      true,
 		},
 	)
 
@@ -52,6 +54,11 @@ func InitDb() {
 		DisableForeignKeyConstraintWhenMigrating: true,
 		Logger:                                   newLogger,
 	})
+	sqlDB, err := db.DB()
+	if err != nil {
+        panic(err)
+    }
+	sqlDB.SetMaxOpenConns(150)
 	utils.FatalErrorHandle(&err, "error opening sql db")
 }
 
@@ -205,26 +212,55 @@ func SaveComment(tx *gorm.DB, uid int32, text string, tag string, typ string, fi
 }
 
 func GenCommenterName(tx *gorm.DB, dzUserID int32, czUserID int32, postID int32, names0 []string, names1 []string) (string, error) {
-	var name string
-	var err error
-	if dzUserID == czUserID {
-		name = consts.DzName
-	} else {
-		var comment Comment
-		err = tx.Unscoped().Where("user_id = ? AND post_id=?", czUserID, postID).First(&comment).Error
-		if err != nil { // token is not in comments
-			var count int64
-			err = tx.Unscoped().Model(&Comment{}).Where("user_id != ? AND post_id=?", dzUserID, postID).
-				Distinct("user_id").Count(&count).Error
-			if err != nil {
-				return "", err
-			}
-			name = utils.GetCommenterName(int(count)+1, names0, names1)
-		} else {
-			name = comment.Name
-		}
-	}
-	return name, nil
+    // 1. 洞主判断，此逻辑不变且高效
+    if dzUserID == czUserID {
+        return consts.DzName, nil
+    }
+
+    // 2. 尝试直接从映射表中查找该用户的匿名
+    var mapping PostCommenter
+    err := tx.Where("post_id = ? AND user_id = ?", postID, czUserID).First(&mapping).Error
+
+    // 2a. 找到了，说明是老评论者，直接返回名字
+    if err == nil {
+        return mapping.CommenterName, nil
+    }
+
+    // 2b. 没找到 (gorm.ErrRecordNotFound)，说明是新评论者，需要生成新名字
+    if err != gorm.ErrRecordNotFound {
+        // 如果是其他数据库错误，则直接返回
+        return "", err
+    }
+
+    // 3. 为新评论者生成名字（核心优化部分）
+    // 使用事务 + 行锁来保证并发安全
+    var post Post
+    // 使用 FOR UPDATE 锁定帖子行，防止多个新评论者同时读取到旧的计数值
+    if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, postID).Error; err != nil {
+        return "", err
+    }
+
+    // 计数值+1
+    newCount := post.DistinctCommenterCount + 1
+    newName := utils.GetCommenterName(int(newCount), names0, names1)
+
+    // 创建新的映射关系
+    newMapping := PostCommenter{
+        PostID:        postID,
+        UserID:        czUserID,
+        CommenterName: newName,
+    }
+    if err := tx.Create(&newMapping).Error; err != nil {
+        return "", err
+    }
+
+    // 更新帖子表中的计数值
+    if err := tx.Model(&post).Update("distinct_commenter_count", newCount).Error; err != nil {
+        // 如果这里失败，事务会自动回滚，保证数据一致性
+        return "", err
+    }
+
+    return newName, nil
 }
 
 func GetBannedTime(tx *gorm.DB, uid int32, startTime int64) (times int64, err error) {

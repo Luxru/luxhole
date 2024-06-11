@@ -72,6 +72,10 @@ func initLimiters() {
 		Period: 24 * time.Hour,
 		Limit:  base.GetDeletePostRateLimitIn24h(base.SuperUserRole),
 	}, "deleteBanLimiter")
+	EmailLimiter = base.InitLimiter(limiter.Rate{
+		Period: 24 * time.Hour,
+		Limit:  viper.GetInt64("max_email_per_ip_per_day"),
+	}, "emailLimiter")
 }
 
 func limiterMiddleware(limiter *limiter.Limiter, msg string, level logger.LogLevel) gin.HandlerFunc {

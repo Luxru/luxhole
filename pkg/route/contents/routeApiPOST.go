@@ -160,6 +160,8 @@ func sendComment(c *gin.Context) {
 	uploadChan = nil
 
 	var commentID int32
+	var name string
+
 	err7 := base.GetDb(false).Transaction(func(tx *gorm.DB) error {
 		err = utils.UnscopedTx(tx, canViewDelete).Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, int32(pid)).Error
 		if err != nil {
@@ -171,8 +173,8 @@ func sendComment(c *gin.Context) {
 			return err
 		}
 
-		var replyToComment base.Comment
 		if replyToCommentID > 0 {
+			var replyToComment base.Comment
 			err = utils.UnscopedTx(tx, canViewDelete).Model(&base.Comment{}).
 				Where("id = ? and post_id = ?", replyToCommentID, pid).First(&replyToComment).Error
 			if err != nil {
@@ -185,7 +187,6 @@ func sendComment(c *gin.Context) {
 			}
 		}
 
-		var name string
 		names0, names1 := consts.Names0, consts.Names1
 
 		name, err = base.GenCommenterName(tx, post.UserID, user.ID, post.ID, names0, names1)
@@ -229,61 +230,12 @@ func sendComment(c *gin.Context) {
 			base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SaveCommentFailed", consts.DatabaseWriteFailedString))
 			return err
 		}
-
-		// Push Notification
-		if !post.DeletedAt.Valid {
-			var attentions []base.Attention
-			err = tx.Model(&base.Attention{}).Where("post_id = ?", int32(pid)).Find(&attentions).Error
-			if err != nil {
-				base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "GetAttentionsByPidFailed", consts.DatabaseReadFailedString))
-				return err
-			}
-
-			pushMessages := make([]base.PushMessage, 0, len(attentions)+1)
-			replyToUserID := post.UserID
-			if replyToCommentID > 0 {
-				replyToUserID = replyToComment.UserID
-			}
-			if replyToUserID != user.ID {
-				pushMessages = append(pushMessages, base.PushMessage{
-					Message:   utils.TrimText(text, 100),
-					Title:     name + "回复了树洞#" + strconv.Itoa(pid),
-					PostID:    int32(pid),
-					CommentID: commentID,
-					Type:      model.ReplyMeComment,
-					UserID:    replyToUserID,
-					UpdatedAt: time.Now(),
-				})
-			}
-			for _, attention := range attentions {
-				if replyToUserID != user.ID && attention.UserID == replyToUserID {
-					pushMessages[0].Type |= model.CommentInFavorited
-				} else if attention.UserID != user.ID {
-					pushMessages = append(pushMessages, base.PushMessage{
-						Message:   utils.TrimText(text, 100),
-						Title:     name + "回复了树洞#" + strconv.Itoa(pid),
-						PostID:    int32(pid),
-						CommentID: commentID,
-						Type:      model.CommentInFavorited,
-						UserID:    attention.UserID,
-						UpdatedAt: time.Now(),
-					})
-				}
-			}
-			err = base.PreProcessPushMessages(tx, pushMessages)
-			if err != nil {
-				base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SaveCommentFailed", consts.DatabaseWriteFailedString))
-				return err
-			}
-			go func() {
-				base.SendToPushService(pushMessages)
-			}()
-		}
-
 		return nil
 	})
 
 	if err7 == nil {
+		go handlePushNotification(post, user, commentID, text, name, replyToCommentID)
+
 		if user.ID == post.UserID {
 			//TODO: (low priority) save this in config
 			re := regexp.MustCompile(`[#＃](性相关|政治相关|引战|未经证实的传闻|令人不适|刷屏|NSFW|nsfw|重复内容)`)
@@ -297,7 +249,6 @@ func sendComment(c *gin.Context) {
 			//wait until upload complete.
 			select {
 			case <-uploadChan:
-
 			case <-time.After(15 * time.Second):
 				log.Println("image upload timeout")
 			}
@@ -319,6 +270,70 @@ func sendComment(c *gin.Context) {
 		}
 	}
 }
+
+func handlePushNotification(post base.Post, user base.User, commentID int32, text string, name string, replyToCommentID int) {
+	if post.DeletedAt.Valid {
+		return
+	}
+
+	db := base.GetDb(false)
+
+	var attentions []base.Attention
+	err := db.Model(&base.Attention{}).Where("post_id = ?", post.ID).Find(&attentions).Error
+	if err != nil {
+		log.Printf("Error getting attentions for push notification: %v", err)
+		return
+	}
+
+	var replyToComment base.Comment
+	replyToUserID := post.UserID
+	if replyToCommentID > 0 {
+		db.Model(&base.Comment{}).Where("id = ? and post_id = ?", replyToCommentID, post.ID).First(&replyToComment)
+		replyToUserID = replyToComment.UserID
+	}
+
+	pushMessages := make([]base.PushMessage, 0, len(attentions)+1)
+	if replyToUserID != user.ID {
+		pushMessages = append(pushMessages, base.PushMessage{
+			Message:   utils.TrimText(text, 100),
+			Title:     name + "回复了树洞#" + strconv.Itoa(int(post.ID)),
+			PostID:    post.ID,
+			CommentID: commentID,
+			Type:      model.ReplyMeComment,
+			UserID:    replyToUserID,
+			UpdatedAt: time.Now(),
+		})
+	}
+
+	for _, attention := range attentions {
+		isReplyToUserInAttentions := false
+		if len(pushMessages) > 0 && attention.UserID == pushMessages[0].UserID {
+			isReplyToUserInAttentions = true
+		}
+
+		if isReplyToUserInAttentions {
+			pushMessages[0].Type |= model.CommentInFavorited
+		} else if attention.UserID != user.ID {
+			pushMessages = append(pushMessages, base.PushMessage{
+				Message:   utils.TrimText(text, 100),
+				Title:     name + "回复了树洞#" + strconv.Itoa(int(post.ID)),
+				PostID:    post.ID,
+				CommentID: commentID,
+				Type:      model.CommentInFavorited,
+				UserID:    attention.UserID,
+				UpdatedAt: time.Now(),
+			})
+		}
+	}
+
+	err = base.PreProcessPushMessages(db, pushMessages)
+	if err != nil {
+		log.Printf("Error preprocessing push messages: %v", err)
+		return
+	}
+	base.SendToPushService(pushMessages)
+}
+
 
 func getReportType(typ string) base.ReportType {
 	switch typ {

@@ -1,11 +1,7 @@
 package security
 
 import (
-	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
-	"gopkg.in/ezzarghili/recaptcha-go.v4"
-	"gorm.io/gorm/clause"
-	"log"
+	"fmt"
 	"net"
 	"net/http"
 	"regexp"
@@ -17,6 +13,10 @@ import (
 	"treehollow-v3-backend/pkg/mail"
 	"treehollow-v3-backend/pkg/route/contents"
 	"treehollow-v3-backend/pkg/utils"
+
+	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
+	"gorm.io/gorm/clause"
 )
 
 func checkEmailParamsCheckMiddleware(c *gin.Context) {
@@ -69,7 +69,7 @@ func checkEmailIsRegisteredUserMiddleware(c *gin.Context) {
 	c.Next()
 }
 
-//compatibility settings
+// compatibility settings
 func checkEmailIsOldTreeholeUserMiddleware(c *gin.Context) {
 	oldToken := c.PostForm("old_token")
 	emailHash := c.MustGet("email_hash").(string)
@@ -105,17 +105,17 @@ func checkEmailRateLimitVerificationCode(c *gin.Context) {
 }
 
 func checkEmailReCaptchaValidationMiddleware(c *gin.Context) {
-	recaptchaVersion := c.PostForm("recaptcha_version")
-	recaptchaToken := c.PostForm("recaptcha_token")
+	// recaptchaVersion := c.PostForm("recaptcha_version")
+	// recaptchaToken := c.PostForm("recaptcha_token")
 	email := strings.ToLower(c.PostForm("email"))
 
-	if len(c.PostForm("recaptcha_token")) < 1 {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 3,
-		})
-		c.Abort()
-		return
-	}
+	// if len(c.PostForm("recaptcha_token")) < 1 {
+	// 	c.JSON(http.StatusOK, gin.H{
+	// 		"code": 3,
+	// 	})
+	// 	c.Abort()
+	// 	return
+	// }
 
 	context, err2 := contents.EmailLimiter.Get(c, c.ClientIP())
 	if err2 != nil {
@@ -140,25 +140,25 @@ func checkEmailReCaptchaValidationMiddleware(c *gin.Context) {
 		}
 	}
 
-	var captcha recaptcha.ReCAPTCHA
-	if recaptchaVersion == "v2" {
-		captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v2_private_key"), recaptcha.V2, 10*time.Second)
-	} else {
-		captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v3_private_key"), recaptcha.V3, 10*time.Second)
-	}
-	captcha.ReCAPTCHALink = "https://www.recaptcha.net/recaptcha/api/siteverify"
-	err := captcha.VerifyWithOptions(recaptchaToken, recaptcha.VerifyOption{
-		RemoteIP:  c.ClientIP(),
-		Threshold: float32(viper.GetFloat64("recaptcha_threshold")),
-	})
-	if err != nil {
-		log.Println("recaptcha server error", err, c.ClientIP(), email)
-		c.JSON(http.StatusOK, gin.H{
-			"code": 3,
-		})
-		c.Abort()
-		return
-	}
+	// var captcha recaptcha.ReCAPTCHA
+	// if recaptchaVersion == "v2" {
+	// 	captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v2_private_key"), recaptcha.V2, 10*time.Second)
+	// } else {
+	// 	captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v3_private_key"), recaptcha.V3, 10*time.Second)
+	// }
+	// captcha.ReCAPTCHALink = "https://www.recaptcha.net/recaptcha/api/siteverify"
+	// err := captcha.VerifyWithOptions(recaptchaToken, recaptcha.VerifyOption{
+	// 	RemoteIP:  c.ClientIP(),
+	// 	Threshold: float32(viper.GetFloat64("recaptcha_threshold")),
+	// })
+	// if err != nil {
+	// 	log.Println("recaptcha server error", err, c.ClientIP(), email)
+	// 	c.JSON(http.StatusOK, gin.H{
+	// 		"code": 3,
+	// 	})
+	// 	c.Abort()
+	// 	return
+	// }
 	c.Next()
 }
 
@@ -169,13 +169,13 @@ func checkEmail(c *gin.Context) {
 
 	code := utils.GenCode()
 
-	err := mail.SendValidationEmail(code, email)
-	if err != nil {
-		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SendEmailFailed"+email, "验证码邮件发送失败。"))
-		return
-	}
+	// err := mail.SendValidationEmail(code, email)
+	// if err != nil {
+	// 	base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SendEmailFailed"+email, "验证码邮件发送失败。"))
+	// 	return
+	// }
 
-	err = base.GetDb(false).Clauses(clause.OnConflict{
+	err := base.GetDb(false).Clauses(clause.OnConflict{
 		UpdateAll: true,
 	}).Create(&base.VerificationCode{Code: code, EmailHash: emailHash, FailedTimes: 0, UpdatedAt: time.Now()}).Error
 	if err != nil {
@@ -185,7 +185,7 @@ func checkEmail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 1,
-		"msg":  "验证码发送成功，5分钟内无法重复发送验证码。请记得查看垃圾邮件。",
+		"msg":  fmt.Sprintf("email: %s 验证码为: %s", email, code),
 	})
 }
 
