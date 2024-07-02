@@ -2,11 +2,6 @@ package contents
 
 import (
 	"encoding/json"
-	"github.com/gin-gonic/gin"
-	"github.com/iancoleman/orderedmap"
-	"github.com/shirou/gopsutil/v3/load"
-	"github.com/spf13/viper"
-	"github.com/ulule/limiter/v3"
 	"log"
 	"net/http"
 	"strconv"
@@ -17,6 +12,12 @@ import (
 	"treehollow-v3-backend/pkg/logger"
 	"treehollow-v3-backend/pkg/utils"
 	"unicode/utf8"
+
+	"github.com/gin-gonic/gin"
+	"github.com/iancoleman/orderedmap"
+	"github.com/shirou/gopsutil/v3/load"
+	"github.com/spf13/viper"
+	"github.com/ulule/limiter/v3"
 )
 
 var EmailLimiter *limiter.Limiter
@@ -212,16 +213,6 @@ func checkParameterTextAndImage() gin.HandlerFunc {
 	}
 }
 
-func safeSubSlice(slice []base.Post, low int, high int) []base.Post {
-	if high > len(slice) {
-		high = len(slice)
-	}
-	if 0 <= low && low <= high {
-		return slice[low:high]
-	}
-	return nil
-}
-
 func searchHotPosts() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page := c.MustGet("page").(int)
@@ -230,23 +221,41 @@ func searchHotPosts() gin.HandlerFunc {
 
 		if keywords == "热榜" {
 			user := c.MustGet("user").(base.User)
-			posts := safeSubSlice(HotPosts.Get(), (page-1)*pageSize, page*pageSize)
-			rtn, err := appendPostDetail(base.GetDb(false), posts, &user)
+
+			// 1. 从Redis ZSET获取热榜帖子ID
+			postIDs, err := GetHotPostIDsFromCache(page, pageSize)
 			if err != nil {
-				base.HttpReturnWithCodeMinusOneAndAbort(c, err)
+				log.Printf("Failed to get hot posts from cache: %v", err)
+				postIDs = []int32{}
+			}
+
+			var posts []base.Post
+			if len(postIDs) > 0 {
+				// 2. 根据ID列表从数据库批量获取帖子详情
+				posts, err = base.GetPostsByIDsInOrder(base.GetDb(false), postIDs)
+				if err != nil {
+					log.Printf("Failed to get post details for hot list: %v", err)
+					posts = []base.Post{}
+				}
+			}
+
+			// 3. 附加帖子详情 (收藏、投票等)
+			rtn, errLog := appendPostDetail(base.GetDb(false), posts, &user)
+			if errLog != nil {
+				base.HttpReturnWithCodeMinusOneAndAbort(c, errLog)
 				return
 			}
 
-			comments, err4 := getCommentsByPosts(posts, &user)
-			if err4 != nil {
-				base.HttpReturnWithCodeMinusOne(c, err4)
+			// 4. 获取相关评论
+			comments, errLog4 := getCommentsByPosts(posts, &user)
+			if errLog4 != nil {
+				base.HttpReturnWithCodeMinusOne(c, errLog4)
 				return
 			}
 
 			c.JSON(http.StatusOK, gin.H{
-				"code": 0,
-				"data": utils.IfThenElse(rtn != nil, rtn, []string{}),
-				//"timestamp": utils.GetTimeStamp(),
+				"code":     0,
+				"data":     utils.IfThenElse(rtn != nil, rtn, []string{}),
 				"count":    utils.IfThenElse(rtn != nil, len(rtn), 0),
 				"comments": comments,
 			})

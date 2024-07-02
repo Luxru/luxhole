@@ -1,11 +1,13 @@
 package base
 
 import (
-	"gorm.io/gorm"
+	"log"
 	"math"
 	"strconv"
 	"treehollow-v3-backend/pkg/model"
 	"treehollow-v3-backend/pkg/utils"
+
+	"gorm.io/gorm"
 )
 
 //TODO: (high priority)delete push messages for ios and android
@@ -19,6 +21,12 @@ func (u *User) AfterCreate(tx *gorm.DB) (err error) {
 
 func (post *Post) AfterCreate(tx *gorm.DB) (err error) {
 	err = tx.Create(&Attention{UserID: post.UserID, PostID: post.ID}).Error
+	if err == nil {
+		// 新帖子创建，加入热榜
+		if e := UpdateHotListScore(tx, post.ID); e != nil {
+			log.Printf("Error updating hot list score on post create: %v", e)
+		}
+	}
 	return
 }
 
@@ -31,6 +39,11 @@ func (comment *Comment) AfterCreate(tx *gorm.DB) (err error) {
 	if err == nil {
 		err = tx.Model(&Post{}).Where("id = ?", comment.PostID).
 			Update("reply_num", gorm.Expr("reply_num + 1")).Error
+		if err == nil {
+			if e := UpdateHotListScore(tx, comment.PostID); e != nil {
+				log.Printf("Error updating hot list score on comment create: %v", e)
+			}
+		}
 	}
 	return
 }
@@ -38,12 +51,24 @@ func (comment *Comment) AfterCreate(tx *gorm.DB) (err error) {
 func (attention *Attention) AfterCreate(tx *gorm.DB) (err error) {
 	err = tx.Table("posts").Where("id = ?", attention.PostID).
 		UpdateColumn("like_num", gorm.Expr("like_num + 1")).Error
+	if err == nil {
+		// 点赞数增加，更新热榜分数
+		if e := UpdateHotListScore(tx, attention.PostID); e != nil {
+			log.Printf("Error updating hot list score on attention create: %v", e)
+		}
+	}
 	return
 }
 
 func (attention *Attention) AfterDelete(tx *gorm.DB) (err error) {
 	err = tx.Table("posts").Where("id = ?", attention.PostID).
 		UpdateColumn("like_num", gorm.Expr("like_num - 1")).Error
+	if err == nil {
+		// 点赞数减少，更新热榜分数
+		if e := UpdateHotListScore(tx, attention.PostID); e != nil {
+			log.Printf("Error updating hot list score on attention delete: %v", e)
+		}
+	}
 	return
 }
 
@@ -51,6 +76,12 @@ func (report *Report) AfterCreate(tx *gorm.DB) (err error) {
 	if report.Type == UserReport && !report.IsComment {
 		err = tx.Table("posts").Where("id = ?", report.PostID).
 			UpdateColumn("report_num", gorm.Expr("report_num + 1")).Error
+		if err == nil {
+			// 举报数增加，更新热榜分数
+			if e := UpdateHotListScore(tx, report.PostID); e != nil {
+				log.Printf("Error updating hot list score on report create: %v", e)
+			}
+		}
 	}
 	return
 }

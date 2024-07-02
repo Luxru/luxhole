@@ -20,7 +20,7 @@ import (
 	"treehollow-v3-backend/pkg/bot"
 	"treehollow-v3-backend/pkg/consts"
 	"treehollow-v3-backend/pkg/logger"
-	"treehollow-v3-backend/pkg/model"
+	"treehollow-v3-backend/pkg/queue"
 	"treehollow-v3-backend/pkg/s3"
 	"treehollow-v3-backend/pkg/utils"
 )
@@ -234,7 +234,18 @@ func sendComment(c *gin.Context) {
 	})
 
 	if err7 == nil {
-		go handlePushNotification(post, user, commentID, text, name, replyToCommentID)
+		// 将 handlePushNotification 放入消息队列
+		pushPayload := queue.PushNotificationPayload{
+			PostID:           post.ID,
+			CommenterUserID:  user.ID,
+			CommentID:        commentID,
+			CommentText:      text,
+			CommenterName:    name,
+			ReplyToCommentID: replyToCommentID,
+		}
+		if err := queue.Enqueue(queue.TaskPushNotification, pushPayload); err != nil {
+			log.Printf("Failed to enqueue push notification task: %v", err)
+		}
 
 		if user.ID == post.UserID {
 			//TODO: (low priority) save this in config
@@ -269,69 +280,6 @@ func sendComment(c *gin.Context) {
 			}
 		}
 	}
-}
-
-func handlePushNotification(post base.Post, user base.User, commentID int32, text string, name string, replyToCommentID int) {
-	if post.DeletedAt.Valid {
-		return
-	}
-
-	db := base.GetDb(false)
-
-	var attentions []base.Attention
-	err := db.Model(&base.Attention{}).Where("post_id = ?", post.ID).Find(&attentions).Error
-	if err != nil {
-		log.Printf("Error getting attentions for push notification: %v", err)
-		return
-	}
-
-	var replyToComment base.Comment
-	replyToUserID := post.UserID
-	if replyToCommentID > 0 {
-		db.Model(&base.Comment{}).Where("id = ? and post_id = ?", replyToCommentID, post.ID).First(&replyToComment)
-		replyToUserID = replyToComment.UserID
-	}
-
-	pushMessages := make([]base.PushMessage, 0, len(attentions)+1)
-	if replyToUserID != user.ID {
-		pushMessages = append(pushMessages, base.PushMessage{
-			Message:   utils.TrimText(text, 100),
-			Title:     name + "回复了树洞#" + strconv.Itoa(int(post.ID)),
-			PostID:    post.ID,
-			CommentID: commentID,
-			Type:      model.ReplyMeComment,
-			UserID:    replyToUserID,
-			UpdatedAt: time.Now(),
-		})
-	}
-
-	for _, attention := range attentions {
-		isReplyToUserInAttentions := false
-		if len(pushMessages) > 0 && attention.UserID == pushMessages[0].UserID {
-			isReplyToUserInAttentions = true
-		}
-
-		if isReplyToUserInAttentions {
-			pushMessages[0].Type |= model.CommentInFavorited
-		} else if attention.UserID != user.ID {
-			pushMessages = append(pushMessages, base.PushMessage{
-				Message:   utils.TrimText(text, 100),
-				Title:     name + "回复了树洞#" + strconv.Itoa(int(post.ID)),
-				PostID:    post.ID,
-				CommentID: commentID,
-				Type:      model.CommentInFavorited,
-				UserID:    attention.UserID,
-				UpdatedAt: time.Now(),
-			})
-		}
-	}
-
-	err = base.PreProcessPushMessages(db, pushMessages)
-	if err != nil {
-		log.Printf("Error preprocessing push messages: %v", err)
-		return
-	}
-	base.SendToPushService(pushMessages)
 }
 
 

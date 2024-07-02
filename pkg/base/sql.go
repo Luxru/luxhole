@@ -1,6 +1,9 @@
 package base
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -11,12 +14,15 @@ import (
 	"treehollow-v3-backend/pkg/model"
 	"treehollow-v3-backend/pkg/utils"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/spf13/viper"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
+
+const HotListKey = "webhole:hot_list:zset"
 
 var db *gorm.DB
 
@@ -56,8 +62,8 @@ func InitDb() {
 	})
 	sqlDB, err := db.DB()
 	if err != nil {
-        panic(err)
-    }
+		panic(err)
+	}
 	sqlDB.SetMaxOpenConns(150)
 	utils.FatalErrorHandle(&err, "error opening sql db")
 }
@@ -101,6 +107,24 @@ func GetComments(pid int32) ([]Comment, error) {
 	var comments []Comment
 	err := db.Unscoped().Where("post_id = ?", pid).Order("id asc").Find(&comments).Error
 	return comments, err
+}
+
+func GetCommentsPaginated(pid int32, page int, pageSize int) ([]Comment, int64, error) {
+	var comments []Comment
+	var total int64
+	offset := (page - 1) * pageSize
+
+	tx := db.Unscoped().Model(&Comment{}).Where("post_id = ?", pid)
+
+	// 先获取总数
+	err := tx.Count(&total).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 再获取分页数据
+	err = tx.Order("id asc").Limit(pageSize).Offset(offset).Find(&comments).Error
+	return comments, total, err
 }
 
 func GetMultipleComments(tx *gorm.DB, pids []int32) ([]Comment, error) {
@@ -193,9 +217,8 @@ func SavePost(uid int32, text string, tag string, typ string, filePath string, m
 }
 
 func GetHotPosts() (posts []Post, err error) {
-	err = db.Where("id>(SELECT MAX(id)-2000 FROM posts)").
-		Order("like_num*3+reply_num+UNIX_TIMESTAMP(created_at)/1800-report_num*10 DESC").
-		Limit(200).Find(&posts).Error
+	err = db.Order("like_num*3+reply_num+UNIX_TIMESTAMP(created_at)/1800-report_num*10 DESC").
+        Limit(200).Find(&posts).Error
 	return
 }
 
@@ -295,6 +318,10 @@ func DeleteByReport(tx *gorm.DB, report Report) (err error) {
 			err = tx.Model(&Post{}).Where("id = ?", report.PostID).Update("reply_num",
 				gorm.Expr("reply_num - 1")).Error
 			if err == nil {
+				// 评论数变化，更新热榜分数
+				if e := UpdateHotListScore(tx, report.PostID); e != nil {
+					log.Printf("Error updating hot list score on comment delete: %v", e)
+				}
 				err = DelCommentCache(int(report.PostID))
 				go func() {
 					SendDeletionToPushService(report.CommentID)
@@ -303,6 +330,10 @@ func DeleteByReport(tx *gorm.DB, report Report) (err error) {
 		}
 	} else {
 		err = tx.Where("id = ?", report.PostID).Delete(&Post{}).Error
+		if err == nil {
+			// 帖子被删除，从热榜中移除
+			GetRedisClient().ZRem(context.Background(), HotListKey, strconv.Itoa(int(report.PostID)))
+		}
 	}
 	return
 }
@@ -353,4 +384,50 @@ func UnbanByReport(tx *gorm.DB, report Report) (err error) {
 		err = tx.Delete(&ban).Error
 	}
 	return
+}
+
+func ComputeScore(post *Post)(score float64){
+	score = float64(post.LikeNum*3+post.ReplyNum) +
+			float64(post.CreatedAt.Unix())/1800.0 -
+			float64(post.ReportNum*10)
+	return
+}
+
+// UpdateHotListScore 计算并更新单个帖子的热度分数
+func UpdateHotListScore(tx *gorm.DB, postID int32) error {
+	var post Post
+	// 获取最新的帖子数据
+	if err := tx.First(&post, postID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 帖子可能已被删除，从热榜中移除
+			GetRedisClient().ZRem(context.Background(), HotListKey, strconv.Itoa(int(postID)))
+			return nil
+		}
+		return err
+	}
+
+	// 热度分计算公式
+	score := ComputeScore(&post)
+
+	// 更新到 Redis ZSET
+	return GetRedisClient().ZAdd(context.Background(), HotListKey, &redis.Z{
+		Score:  score,
+		Member: strconv.Itoa(int(postID)),
+	}).Err()
+}
+
+// GetPostsByIDsInOrder 根据ID列表获取帖子，并保持传入的顺序
+func GetPostsByIDsInOrder(tx *gorm.DB, postIDs []int32) ([]Post, error) {
+	if len(postIDs) == 0 {
+		return []Post{}, nil
+	}
+
+	var posts []Post
+	// 将 ID 列表转换为逗号分隔的字符串，例如 [10, 2, 5] -> "10,2,5"
+	idStr := strings.Trim(strings.Replace(fmt.Sprint(postIDs), " ", ",", -1), "[]")
+	// 使用 MySQL 的 FIND_IN_SET 函数来保证返回的顺序与 idStr 中的顺序一致
+	orderClause := fmt.Sprintf("FIND_IN_SET(id, '%s')", idStr)
+
+	err := tx.Where("id IN (?)", postIDs).Order(orderClause).Find(&posts).Error
+	return posts, err
 }

@@ -2,10 +2,6 @@ package security
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"net"
 	"net/http"
 	"strings"
@@ -13,11 +9,14 @@ import (
 	"treehollow-v3-backend/pkg/base"
 	"treehollow-v3-backend/pkg/consts"
 	"treehollow-v3-backend/pkg/logger"
-	"treehollow-v3-backend/pkg/mail"
+	"treehollow-v3-backend/pkg/queue"
 	"treehollow-v3-backend/pkg/utils"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
-
-
 
 func createDevice(c *gin.Context, user *base.User, pwHashed string, tx *gorm.DB) error {
 	email := strings.ToLower(c.PostForm("email"))
@@ -65,15 +64,20 @@ func createDevice(c *gin.Context, user *base.User, pwHashed string, tx *gorm.DB)
 		return rtn.Err
 	}
 
-
 	c.JSON(http.StatusOK, gin.H{
 		"code":  0,
 		"token": token,
 		"uuid":  deviceUUID,
 	})
-	go func() {
-		_ = mail.SendPasswordNonceEmail(user.ForgetPwNonce, email)
-	}()
+
+	// 将邮件发送任务加入队列
+	payload := queue.EmailPayload{
+		Type:      "nonce",
+		Recipient: email,
+		Nonce:     user.ForgetPwNonce,
+	}
+	_ = queue.Enqueue(queue.TaskSendEmail, payload)
+
 	return nil
 }
 
@@ -195,7 +199,6 @@ func changePassword(c *gin.Context) {
 			base.HttpReturnWithCodeMinusOne(c, logger.NewError(result.Error, "UpdateEmailEncryptedFailed", consts.DatabaseWriteFailedString))
 			return result.Error
 		}
-
 
 		err5 := tx.Where("user_id = ?", user.ID).
 			Delete(&base.Device{}).Error

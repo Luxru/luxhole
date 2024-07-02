@@ -6,9 +6,9 @@ import { URLSearchParams } from 'https://jslib.k6.io/url/1.0.0/index.js'; // 引
 // --- 配置选项 ---
 export const options = {
     stages: [
-        { duration: '10s', target: 500 }, // 线性增加到500个并发用户
-        { duration: '40s', target: 500 }, // 维持500个并发用户
-        { duration: '10s', target: 0 },  // 减少到0
+        { duration: '5s', target: 500 }, // 线性增加到500个并发用户
+        { duration: '20s', target: 500 }, // 维持500个并发用户
+        { duration: '5s', target: 0 },  // 减少到0
     ],
     thresholds: {
         'http_req_duration': ['p(95)<100'], // 发表评论应该非常快，我们设定一个更严苛的目标

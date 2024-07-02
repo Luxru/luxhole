@@ -1,10 +1,6 @@
 package contents
 
 import (
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"github.com/robfig/cron/v3"
-	"github.com/spf13/viper"
 	"log"
 	"net"
 	"net/http"
@@ -15,13 +11,20 @@ import (
 	"treehollow-v3-backend/pkg/consts"
 	"treehollow-v3-backend/pkg/logger"
 	"treehollow-v3-backend/pkg/logger/ginLogger"
+	"treehollow-v3-backend/pkg/queue"
 	"treehollow-v3-backend/pkg/route/auth"
 	"treehollow-v3-backend/pkg/utils"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/robfig/cron/v3"
+	"github.com/spf13/viper"
 )
 
 func InitService(){
 	bot.InitBot()
 	initLimiters()
+	queue.StartWorkers()
 	shutdownCountDown = 2
 	c := cron.New()
 	_, _ = c.AddFunc("0 0 * * *", func() {
@@ -203,8 +206,8 @@ func AddContentsControllers(r *gin.Engine) (*gin.Engine) {
 		sendVote)
 	r.POST("/v3/send/comment",
 		auth.DisallowUnregisteredUsers(),
-		limiterMiddleware(commentLimiter, "请不要短时间内连续发送树洞回复", logger.INFO),
-		limiterMiddleware(commentLimiter2, "你24小时内已经发送太多树洞回复了", logger.WARN),
+		// limiterMiddleware(commentLimiter, "请不要短时间内连续发送树洞回复", logger.INFO),
+		// limiterMiddleware(commentLimiter2, "你24小时内已经发送太多树洞回复了", logger.WARN),
 		disallowBannedPostUsers(),
 		checkParameterTextAndImage(),
 		sendComment)

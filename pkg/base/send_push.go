@@ -3,11 +3,12 @@ package base
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/spf13/viper"
-	"gorm.io/gorm"
 	"log"
 	"net/http"
 	"treehollow-v3-backend/pkg/model"
+
+	"github.com/spf13/viper"
+	"gorm.io/gorm"
 )
 
 func PreProcessPushMessages(tx *gorm.DB, msgs []PushMessage) error {
@@ -47,21 +48,38 @@ func PreProcessPushMessages(tx *gorm.DB, msgs []PushMessage) error {
 }
 
 func SendToPushService(msgs []PushMessage) {
-	postBody, _ := json.Marshal(msgs)
-	bytesBody := bytes.NewBuffer(postBody)
-	req, err2 := http.NewRequest("POST",
-		"http://"+viper.GetString("push_internal_api_listen_address")+"/send_messages", bytesBody)
-	if err2 != nil {
-		log.Printf("push request build failed: %s\n", err2)
+	// 过滤掉不需要推送的消息
+	var messagesToPush []PushMessage
+	for _, msg := range msgs {
+		if msg.DoPush {
+			messagesToPush = append(messagesToPush, msg)
+		}
+	}
+	if len(messagesToPush) == 0 {
 		return
 	}
-	clientHttp := &http.Client{}
-	resp, err3 := clientHttp.Do(req)
-	if err3 != nil {
-		log.Printf("push failed: %s\n", err3)
+
+	// 写入数据库
+	if err := db.Create(&messagesToPush).Error; err != nil {
+		log.Printf("create push messages failed: %s", err)
 		return
 	}
-	_ = resp.Body.Close()
+	for _, msg := range msgs{
+		log.Printf("Send Push msg for %d title: %s content: %s", msg.UserID, msg.Title, msg.Message)
+	}
+	// 发送到推送服务
+	// postBody, _ := json.Marshal(messagesToPush)
+	// bytesBody := bytes.NewBuffer(postBody)
+	// resp, err := http.Post(
+	// 	"http://"+viper.GetString("push_internal_api_listen_address")+"/send_messages",
+	// 	"application/json",
+	// 	bytesBody)
+
+	// if err != nil {
+	// 	log.Printf("push failed: %s\n", err)
+	// 	return
+	// }
+	// defer resp.Body.Close()
 }
 
 func SendDeletionToPushService(commentID int32) {

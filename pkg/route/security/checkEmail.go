@@ -2,6 +2,9 @@ package security
 
 import (
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
+	"gorm.io/gorm/clause"
 	"net"
 	"net/http"
 	"regexp"
@@ -10,13 +13,9 @@ import (
 	"treehollow-v3-backend/pkg/base"
 	"treehollow-v3-backend/pkg/consts"
 	"treehollow-v3-backend/pkg/logger"
-	"treehollow-v3-backend/pkg/mail"
+	"treehollow-v3-backend/pkg/queue"
 	"treehollow-v3-backend/pkg/route/contents"
 	"treehollow-v3-backend/pkg/utils"
-
-	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
-	"gorm.io/gorm/clause"
 )
 
 func checkEmailParamsCheckMiddleware(c *gin.Context) {
@@ -139,41 +138,24 @@ func checkEmailReCaptchaValidationMiddleware(c *gin.Context) {
 			}
 		}
 	}
-
-	// var captcha recaptcha.ReCAPTCHA
-	// if recaptchaVersion == "v2" {
-	// 	captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v2_private_key"), recaptcha.V2, 10*time.Second)
-	// } else {
-	// 	captcha, _ = recaptcha.NewReCAPTCHA(viper.GetString("recaptcha_v3_private_key"), recaptcha.V3, 10*time.Second)
-	// }
-	// captcha.ReCAPTCHALink = "https://www.recaptcha.net/recaptcha/api/siteverify"
-	// err := captcha.VerifyWithOptions(recaptchaToken, recaptcha.VerifyOption{
-	// 	RemoteIP:  c.ClientIP(),
-	// 	Threshold: float32(viper.GetFloat64("recaptcha_threshold")),
-	// })
-	// if err != nil {
-	// 	log.Println("recaptcha server error", err, c.ClientIP(), email)
-	// 	c.JSON(http.StatusOK, gin.H{
-	// 		"code": 3,
-	// 	})
-	// 	c.Abort()
-	// 	return
-	// }
 	c.Next()
 }
 
 func checkEmail(c *gin.Context) {
 	email := strings.ToLower(c.PostForm("email"))
-
 	emailHash := c.MustGet("email_hash").(string)
-
 	code := utils.GenCode()
 
-	// err := mail.SendValidationEmail(code, email)
-	// if err != nil {
-	// 	base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SendEmailFailed"+email, "验证码邮件发送失败。"))
-	// 	return
-	// }
+	// 将邮件发送任务加入队列
+	payload := queue.EmailPayload{
+		Type:      "validation",
+		Recipient: email,
+		Code:      code,
+	}
+	if err := queue.Enqueue(queue.TaskSendEmail, payload); err != nil {
+		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "EnqueueEmailFailed"+email, "验证码任务入队失败。"))
+		return
+	}
 
 	err := base.GetDb(false).Clauses(clause.OnConflict{
 		UpdateAll: true,
@@ -191,18 +173,21 @@ func checkEmail(c *gin.Context) {
 
 func unregisterEmail(c *gin.Context) {
 	email := strings.ToLower(c.PostForm("email"))
-
 	emailHash := c.MustGet("email_hash").(string)
-
 	code := utils.GenCode()
 
-	err := mail.SendUnregisterValidationEmail(code, email)
-	if err != nil {
-		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "SendEmailFailed"+email, "验证码邮件发送失败。"))
+	// 将邮件发送任务加入队列
+	payload := queue.EmailPayload{
+		Type:      "unregister",
+		Recipient: email,
+		Code:      code,
+	}
+	if err := queue.Enqueue(queue.TaskSendEmail, payload); err != nil {
+		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err, "EnqueueEmailFailed"+email, "验证码任务入队失败。"))
 		return
 	}
 
-	err = base.GetDb(false).Clauses(clause.OnConflict{
+	err := base.GetDb(false).Clauses(clause.OnConflict{
 		UpdateAll: true,
 	}).Create(&base.VerificationCode{Code: code, EmailHash: emailHash, FailedTimes: 0, UpdatedAt: time.Now()}).Error
 	if err != nil {

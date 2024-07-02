@@ -96,18 +96,32 @@ func detailPost(c *gin.Context) {
 		})
 		return
 	}
-	comments, err2 := base.GetCommentsWithCache(&post, time.Now())
+
+	// 评论分页逻辑
+	commentPage, err := strconv.Atoi(c.DefaultQuery("comment_page", "1"))
+	if err != nil || commentPage < 1 {
+		commentPage = 1
+	}
+	const commentPageSize = 50 // 每页评论数
+
+	comments, totalComments, err2 := base.GetCommentsPaginated(post.ID, commentPage, commentPageSize)
 	if err2 != nil {
-		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err2, "GetCommentsWithCacheFailed", consts.DatabaseReadFailedString))
+		base.HttpReturnWithCodeMinusOne(c, logger.NewError(err2, "GetCommentsPaginatedFailed", consts.DatabaseReadFailedString))
 		return
 	}
 
 	data := commentsToJson(comments, &user)
-	post.ReplyNum = int32(len(data))
+	post.ReplyNum = int32(totalComments) // 更新为总评论数
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": utils.IfThenElse(data != nil, data, []string{}),
 		"post": postToJson(&post, &user, attention == 1, votes[post.ID]),
+		"comment_pagination": gin.H{
+			"total":      totalComments,
+			"page":       commentPage,
+			"page_size":  commentPageSize,
+			"has_more":   int64(commentPage*commentPageSize) < totalComments,
+		},
 	})
 	return
 }
@@ -456,9 +470,8 @@ func searchAttentionPost(c *gin.Context) {
 	jsPosts := postsToJson(posts, &user, attentionPids, votes)
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
-		"data": utils.IfThenElse(jsPosts != nil, jsPosts, []string{}),
-		//"timestamp": utils.GetTimeStamp(),
+		"code":  0,
+		"data":  utils.IfThenElse(jsPosts != nil, jsPosts, []string{}),
 		"count": utils.IfThenElse(jsPosts != nil, len(jsPosts), 0),
 	})
 	return

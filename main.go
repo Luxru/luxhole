@@ -45,7 +45,6 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	contents.RefreshHotPosts()
 	contents.InitHotPostsRefreshCron()
 	contents.InitService()
 	

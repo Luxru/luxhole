@@ -6,9 +6,9 @@ import { SharedArray } from 'k6/data';
 export const options = {
     // 定义虚拟用户数(VUs)和测试时长
     stages: [
-        { duration: '20s', target: 1000 }, // 20秒内从0 VU线性增加到1000 VU
-        { duration: '1m', target: 800 },  // 维持800 VU运行1分钟
-        { duration: '20s', target: 0 },  // 10秒内线性减少到0 VU
+        { duration: '10s', target: 1000 }, // 10秒内从0 VU线性增加到1000 VU
+        { duration: '30s', target: 1000 },  // 维持1000 VU运行30 s
+        { duration: '10s', target: 0 },  // 10秒内线性减少到0 VU
     ],
     // 定义性能阈值，测试不达标时会失败
     thresholds: {

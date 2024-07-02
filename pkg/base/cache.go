@@ -84,52 +84,64 @@ func GetCommentsWithCache(post *Post, now time.Time) ([]Comment, error) {
 func GetMultipleCommentsWithCache(tx *gorm.DB, posts []Post, now time.Time) (map[int32][]Comment, *logger.InternalError) {
 	ctx := context.TODO()
 	rtn := make(map[int32][]Comment)
-	noCachePids := make(map[int32]bool)
 	var noCachePidsArray []int32
+	// 区分哪些需要从缓存读，哪些需要从DB读
 	for _, post := range posts {
 		pid := post.ID
+		// 如果不需要缓存，则加入DB读取列表
 		if !NeedCacheComment(&post, now) {
-			noCachePids[pid] = true
 			noCachePidsArray = append(noCachePidsArray, pid)
 			continue
 		}
 
+		// 尝试从缓存读取
 		pidStr := strconv.Itoa(int(pid))
 		var comments []Comment
 		err := commentCache.Get(ctx, "pid"+pidStr, &comments)
 		if err == nil {
-			rtn[pid] = comments
+			rtn[pid] = comments // 缓存命中
 		} else {
-			noCachePids[pid] = true
-			noCachePidsArray = append(noCachePidsArray, pid)
-			continue
+			noCachePidsArray = append(noCachePidsArray, pid) // 缓存未命中，加入DB读取列表
 		}
 	}
 
+	// 从DB一次性读取所有未命中缓存的评论
 	if len(noCachePidsArray) > 0 {
-		comments, err := GetMultipleComments(tx, noCachePidsArray)
+		commentsFromDB, err := GetMultipleComments(tx, noCachePidsArray)
 		if err != nil {
 			return nil, logger.NewError(err, "SQLGetMultipleCommentsFailed", consts.DatabaseReadFailedString)
 		}
-		for _, comment := range comments {
-			rtn[comment.PostID] = append(rtn[comment.PostID], comment)
+		// 按 post_id 分组
+		commentsMap := make(map[int32][]Comment)
+		for _, comment := range commentsFromDB {
+			commentsMap[comment.PostID] = append(commentsMap[comment.PostID], comment)
 		}
-	}
-	for _, post := range posts {
-		pid := post.ID
-		if _, noCache := noCachePids[pid]; noCache {
-			comments2, commentsExist := rtn[pid]
-			if !commentsExist {
-				comments2 = []Comment{}
+
+		// 将DB读取的结果合并到最终结果中，并写回缓存
+		for _, pid := range noCachePidsArray {
+			commentsForPid, ok := commentsMap[pid]
+			if !ok {
+				// 如果DB中也没有，则为空slice
+				commentsForPid = []Comment{}
 			}
-			err := commentCache.Set(&cache.Item{
-				Ctx:   ctx,
-				Key:   "pid" + strconv.Itoa(int(pid)),
-				Value: &comments2,
-				TTL:   CommentCacheExpireTime,
-			})
-			if err != nil {
-				return nil, logger.NewError(err, "CommentCacheSetFailed", consts.DatabaseReadFailedString)
+			rtn[pid] = commentsForPid
+
+			// 只有当该post需要缓存时才进行设置
+			postMap := make(map[int32]Post)
+			for _, p := range posts {
+				postMap[p.ID] = p
+			}
+			if p, exists := postMap[pid]; exists && NeedCacheComment(&p, now) {
+				err := commentCache.Set(&cache.Item{
+					Ctx:   ctx,
+					Key:   "pid" + strconv.Itoa(int(pid)),
+					Value: &commentsForPid, // 缓存从DB查到的结果
+					TTL:   CommentCacheExpireTime,
+				})
+				if err != nil {
+					// 缓存设置失败不应阻塞主流程，记录日志即可
+					log.Printf("CommentCacheSetFailed for pid %d: %v", pid, err)
+				}
 			}
 		}
 	}
